@@ -58,7 +58,7 @@ export const authMiddleware = (): MiddlewareHandler<AppEnv> => {
 // =============================================================================
 
 const verifyToken = async (token: string, secret: string): Promise<void> => {
-  const sec = jose.base64url.decode(secret)
+  const sec = base64ToUint8Array(secret)
 
   await jose.jwtVerify(token, sec, {
     issuer: 'wcp',
@@ -66,12 +66,21 @@ const verifyToken = async (token: string, secret: string): Promise<void> => {
   })
 }
 
+const base64ToUint8Array = (base64: string): Uint8Array => {
+  const binary = atob(base64)
+  const bytes = new Uint8Array(binary.length)
+  for (let i = 0; i < binary.length; i++) {
+    bytes[i] = binary.charCodeAt(i)
+  }
+  return bytes
+}
+
 // =============================================================================
 // Token Generation (for upstream services)
 // =============================================================================
 
 export const generateToken = async (secret: string, expiry: string): Promise<string> => {
-  const sec = jose.base64url.decode(secret)
+  const sec = base64ToUint8Array(secret)
 
   const token = await new jose.SignJWT({})
     .setProtectedHeader({ alg: 'HS256' })
