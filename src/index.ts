@@ -8,7 +8,7 @@ import license from './routes/license'
 
 const app = new Hono<AppEnv>()
 
-// Middleware
+// Middlewares
 app.use(
   '*',
   cors({
