@@ -1,0 +1,19 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "tranquil-patterns-store",
+  "main": "src/index.ts",
+  "compatibility_date": "2025-04-17",
+  "compatibility_flags": ["nodejs_compat"],
+  "r2_buckets": [
+    {
+      "binding": "bucket",
+      "bucket_name": "tranquil",
+    },
+  ],
+  "d1_databases": [
+    {
+      "binding": "database",
+      "database_id": "671954cf-2942-44a1-80e6-e943cece374b",
+    },
+  ],
+}
