@@ -23,8 +23,18 @@ export async function extractDevicePublicKey(pemChain: string): Promise<CryptoKe
     const cn = cert.subject.match(/CN=([^,]+)/)?.[1] || ''
 
     if (cn.includes('iotdevices.koiosdigital.net')) {
-      // Extract the public key
-      return await cert.publicKey.export()
+      // Export public key as SPKI, then re-import with RSA-OAEP for encryption
+      const exportedKey = await cert.publicKey.export()
+      const spkiBytes = await crypto.subtle.exportKey('spki', exportedKey)
+
+      // Re-import with RSA-OAEP algorithm for encryption
+      return await crypto.subtle.importKey(
+        'spki',
+        spkiBytes,
+        { name: 'RSA-OAEP', hash: 'SHA-256' },
+        false,
+        ['encrypt']
+      )
     }
   }
 
