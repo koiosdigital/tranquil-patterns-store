@@ -5,8 +5,10 @@ import * as x509 from '@peculiar/x509'
 // =============================================================================
 
 export async function extractDevicePublicKey(pemChain: string): Promise<CryptoKey> {
+  //pemchain is base64
+  const rawPemChain = Buffer.from(pemChain, 'base64').toString('utf-8')
   // Split PEM chain into individual certificates
-  const certPems = pemChain
+  const certPems = rawPemChain
     .split(/-----END CERTIFICATE-----/)
     .filter((s) => s.includes('-----BEGIN CERTIFICATE-----'))
     .map((s) => s.trim() + '\n-----END CERTIFICATE-----')
