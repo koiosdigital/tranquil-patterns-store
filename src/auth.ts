@@ -92,3 +92,20 @@ export const generateToken = async (secret: string, expiry: string): Promise<str
 
   return token
 }
+
+
+export const generateDeviceStoreToken = async (secret: string, device_id: string, expiry: number): Promise<string> => {
+  const sec = base64ToUint8Array(secret);
+
+  const token = await new jose.SignJWT({
+    device_id: device_id
+  })
+    .setProtectedHeader({ alg: 'HS256' })
+    .setIssuedAt()
+    .setIssuer('wcp')
+    .setAudience('wcp')
+    .setExpirationTime(expiry)
+    .sign(sec)
+
+  return token
+}

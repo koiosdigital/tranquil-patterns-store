@@ -40,6 +40,9 @@ license.post('/', auth.authMiddleware(), async (c) => {
     .join('')
   const licenseId = `LIC-${now}-${randomHex}`
 
+  //Generate user-scoped JWT
+  const token = await auth.generateDeviceStoreToken(c.env.USER_JWT_SECRET, device_id, now + oneMonthSeconds)
+
   const licensePayload: LicensePayload = {
     for_device: device_id,
     max_patterns: 100,
@@ -47,6 +50,7 @@ license.post('/', auth.authMiddleware(), async (c) => {
     valid_to: now + oneMonthSeconds,
     license_id: licenseId,
     issued_at: now,
+    store_token: token
   }
 
   try {

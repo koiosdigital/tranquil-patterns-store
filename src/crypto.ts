@@ -52,6 +52,7 @@ export interface LicensePayload {
   valid_to: number
   license_id: string
   issued_at: number
+  store_token: string
 }
 
 /**
@@ -128,6 +129,7 @@ function serializeLicensePayload(payload: LicensePayload): Uint8Array {
     encodeInt64(4, payload.valid_to),
     encodeString(5, payload.license_id),
     encodeInt64(6, payload.issued_at),
+    encodeString(7, payload.store_token)
   ]
 
   const totalLength = parts.reduce((sum, p) => sum + p.length, 0)
