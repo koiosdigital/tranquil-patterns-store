@@ -54,6 +54,92 @@ export interface LicensePayload {
   issued_at: number
 }
 
+/**
+ * Encode a number as a protobuf varint
+ */
+function encodeVarint(value: number): Uint8Array {
+  const result: number[] = []
+  while (value > 127) {
+    result.push((value & 0x7f) | 0x80)
+    value >>>= 7
+  }
+  result.push(value)
+  return new Uint8Array(result)
+}
+
+/**
+ * Encode a string field in protobuf format
+ */
+function encodeString(fieldNum: number, value: string): Uint8Array {
+  if (!value) return new Uint8Array(0)
+  const encoded = new TextEncoder().encode(value)
+  const tag = encodeVarint((fieldNum << 3) | 2) // wire type 2 = length-delimited
+  const length = encodeVarint(encoded.length)
+  const result = new Uint8Array(tag.length + length.length + encoded.length)
+  result.set(tag, 0)
+  result.set(length, tag.length)
+  result.set(encoded, tag.length + length.length)
+  return result
+}
+
+/**
+ * Encode a uint32 field in protobuf format
+ */
+function encodeUint32(fieldNum: number, value: number): Uint8Array {
+  if (value === 0) return new Uint8Array(0)
+  const tag = encodeVarint((fieldNum << 3) | 0) // wire type 0 = varint
+  const val = encodeVarint(value)
+  const result = new Uint8Array(tag.length + val.length)
+  result.set(tag, 0)
+  result.set(val, tag.length)
+  return result
+}
+
+/**
+ * Encode an int64 field in protobuf format (as varint for positive values)
+ */
+function encodeInt64(fieldNum: number, value: number): Uint8Array {
+  if (value === 0) return new Uint8Array(0)
+  const tag = encodeVarint((fieldNum << 3) | 0) // wire type 0 = varint
+  const val = encodeVarint(value)
+  const result = new Uint8Array(tag.length + val.length)
+  result.set(tag, 0)
+  result.set(val, tag.length)
+  return result
+}
+
+/**
+ * Serialize LicensePayload to protobuf bytes.
+ *
+ * message LicensePayload {
+ *   string for_device = 1;
+ *   uint32 max_patterns = 2;
+ *   int64 valid_from = 3;
+ *   int64 valid_to = 4;
+ *   string license_id = 5;
+ *   int64 issued_at = 6;
+ * }
+ */
+function serializeLicensePayload(payload: LicensePayload): Uint8Array {
+  const parts = [
+    encodeString(1, payload.for_device),
+    encodeUint32(2, payload.max_patterns),
+    encodeInt64(3, payload.valid_from),
+    encodeInt64(4, payload.valid_to),
+    encodeString(5, payload.license_id),
+    encodeInt64(6, payload.issued_at),
+  ]
+
+  const totalLength = parts.reduce((sum, p) => sum + p.length, 0)
+  const result = new Uint8Array(totalLength)
+  let offset = 0
+  for (const part of parts) {
+    result.set(part, offset)
+    offset += part.length
+  }
+  return result
+}
+
 export async function signLicense(
   payload: LicensePayload,
   privateKeyPem: string
@@ -61,9 +147,8 @@ export async function signLicense(
   // Import RSA private key
   const privateKey = await importRsaPrivateKey(privateKeyPem)
 
-  // Serialize payload to JSON (deterministic order)
-  const payloadJson = JSON.stringify(payload)
-  const payloadBytes = new TextEncoder().encode(payloadJson)
+  // Serialize payload to protobuf bytes (must match device's parsing)
+  const payloadBytes = serializeLicensePayload(payload)
 
   // Sign with RSA-SHA256
   const signature = await crypto.subtle.sign(
@@ -145,7 +230,6 @@ export async function encryptPattern(
 // Encrypted Pattern File Builder
 // =============================================================================
 
-const MAGIC = 0x4b444550 // "KDEP"
 const VERSION = 0x0001
 const SCHEME = 1 // RSA-OAEP + AES-GCM
 const HEADER_SIZE = 568
@@ -168,8 +252,13 @@ export function buildEncryptedPatternFile(result: EncryptionResult): Uint8Array 
 
   let offset = 0
 
-  // Magic (4 bytes) - little-endian
-  view.setUint32(offset, MAGIC, true)
+  // Magic (4 bytes) - "KDEP" as ASCII bytes
+  // ESP32 reads as LE uint32, so we write bytes directly: K, D, E, P
+  // This gives 0x5045444B when read as LE on ESP32
+  bytes[0] = 0x4b // 'K'
+  bytes[1] = 0x44 // 'D'
+  bytes[2] = 0x45 // 'E'
+  bytes[3] = 0x50 // 'P'
   offset += 4
 
   // Version (2 bytes) - little-endian
@@ -236,4 +325,4 @@ function base64ToArrayBuffer(base64: string): ArrayBuffer {
   return bytes.buffer
 }
 
-export { arrayBufferToBase64 }
+export { arrayBufferToBase64, serializeLicensePayload }
