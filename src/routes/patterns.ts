@@ -81,6 +81,9 @@ patterns.get('/download/:token', async (c) => {
 
   const data = await object.arrayBuffer()
 
+  // Delete the file after reading (one-time download)
+  await c.env.bucket.delete(objectName)
+
   c.header('Content-Type', 'application/octet-stream')
   c.header('Content-Disposition', `attachment; filename="${token}.dat"`)
 
