@@ -19,49 +19,6 @@ import { logAudit } from '../audit'
 
 const patterns = new Hono<AppEnv>()
 
-/**
- * Migrate a pattern from old text format to THRB binary format.
- * Checks if .dat exists, if not converts from text and deletes old file.
- */
-async function migratePatternToThrb(
-  bucket: R2Bucket,
-  uuid: string
-): Promise<{ migrated: boolean; error?: string }> {
-  const datPath = `patterns/${uuid}.dat`
-  const textPath = `patterns/${uuid}`
-
-  // Check if THRB .dat already exists
-  const datObject = await bucket.head(datPath)
-  if (datObject) {
-    return { migrated: false } // Already in THRB format
-  }
-
-  // Check if old text format exists
-  const textObject = await bucket.get(textPath)
-  if (!textObject) {
-    return { migrated: false } // No pattern file found
-  }
-
-  try {
-    // Read text pattern and convert to THRB
-    const textData = await textObject.text()
-    const thrbFile = buildThrbFile(textData)
-
-    // Save as THRB .dat
-    await bucket.put(datPath, thrbFile, {
-      httpMetadata: { contentType: 'application/octet-stream' },
-    })
-
-    // Delete old text file
-    await bucket.delete(textPath)
-
-    return { migrated: true }
-  } catch (e) {
-    const error = e instanceof Error ? e.message : 'Migration failed'
-    return { migrated: false, error }
-  }
-}
-
 patterns.get('/', auth.authMiddleware(), async (c) => {
   const query = paginationQuerySchema.safeParse({
     page: c.req.query('page'),
@@ -81,16 +38,6 @@ patterns.get('/', auth.authMiddleware(), async (c) => {
     .prepare('SELECT * FROM patterns ORDER BY popularity DESC LIMIT ? OFFSET ?')
     .bind(per_page, offset)
   const { results }: { results: Pattern[] } = await stmt.all()
-
-  // Migrate patterns to THRB format if needed
-  for (const p of results) {
-    const { migrated, error } = await migratePatternToThrb(c.env.bucket, p.uuid)
-    if (migrated) {
-      console.log(`Migrated pattern ${p.uuid} to THRB format`)
-    } else if (error) {
-      console.error(`Failed to migrate pattern ${p.uuid}: ${error}`)
-    }
-  }
 
   return c.json({
     data: results,
