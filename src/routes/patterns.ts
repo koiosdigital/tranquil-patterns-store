@@ -82,9 +82,15 @@ patterns.get('/', auth.authMiddleware(), async (c) => {
     .bind(per_page, offset)
   const { results }: { results: Pattern[] } = await stmt.all()
 
-  // Migrate patterns to THRB format if needed (background, don't block response)
-  const migrations = results.map((p) => migratePatternToThrb(c.env.bucket, p.uuid))
-  Promise.all(migrations).catch((e) => console.error('Migration error:', e))
+  // Migrate patterns to THRB format if needed
+  for (const p of results) {
+    const { migrated, error } = await migratePatternToThrb(c.env.bucket, p.uuid)
+    if (migrated) {
+      console.log(`Migrated pattern ${p.uuid} to THRB format`)
+    } else if (error) {
+      console.error(`Failed to migrate pattern ${p.uuid}: ${error}`)
+    }
+  }
 
   return c.json({
     data: results,
