@@ -4,8 +4,12 @@ import * as x509 from '@peculiar/x509'
 // Certificate Chain Parsing
 // =============================================================================
 
+/**
+ * Extract the device public key from a base64-encoded PEM certificate chain.
+ * Finds the leaf certificate where CN contains 'iotdevices.koiosdigital.net'.
+ * @param pemChain - Base64-encoded PEM certificate chain
+ */
 export async function extractDevicePublicKey(pemChain: string): Promise<CryptoKey> {
-  //pemchain is base64
   const rawPemChain = Buffer.from(pemChain, 'base64').toString('utf-8')
   // Split PEM chain into individual certificates
   const certPems = rawPemChain
@@ -39,6 +43,29 @@ export async function extractDevicePublicKey(pemChain: string): Promise<CryptoKe
   }
 
   throw new Error('No device certificate found (CN must contain iotdevices.koiosdigital.net)')
+}
+
+/**
+ * Extract the device CN from a base64-encoded PEM certificate chain.
+ * @param pemChain - Base64-encoded PEM certificate chain
+ * @returns The CN of the device certificate
+ */
+export function extractDeviceCn(pemChain: string): string {
+  const rawPemChain = Buffer.from(pemChain, 'base64').toString('utf-8')
+  const certPems = rawPemChain
+    .split(/-----END CERTIFICATE-----/)
+    .filter((s) => s.includes('-----BEGIN CERTIFICATE-----'))
+    .map((s) => s.trim() + '\n-----END CERTIFICATE-----')
+
+  for (const pem of certPems) {
+    const cert = new x509.X509Certificate(pem)
+    const cn = cert.subject.match(/CN=([^,]+)/)?.[1] || ''
+    if (cn.includes('iotdevices.koiosdigital.net')) {
+      return cn
+    }
+  }
+
+  throw new Error('No device certificate found')
 }
 
 // =============================================================================
@@ -119,6 +146,7 @@ function encodeInt64(fieldNum: number, value: number): Uint8Array {
  *   int64 valid_to = 4;
  *   string license_id = 5;
  *   int64 issued_at = 6;
+ *   string store_token = 7;
  * }
  */
 function serializeLicensePayload(payload: LicensePayload): Uint8Array {

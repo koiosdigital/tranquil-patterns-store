@@ -8,7 +8,7 @@ export type AppEnv = {
   }
 }
 
-export type ErrorStatus = 400 | 401 | 403 | 404 | 500
+export type ErrorStatus = 400 | 401 | 403 | 404 | 429 | 500
 
 export const jsonError = (c: Context, status: ErrorStatus, message: string) =>
   c.json({ error: message }, status)

@@ -6,10 +6,13 @@ import { type Pattern, postPatternBodySchema, uuidSchema } from '../types'
 import * as auth from '../auth'
 import {
   extractDevicePublicKey,
+  extractDeviceCn,
   encryptPattern,
   buildEncryptedPatternFile,
   arrayBufferToBase64,
 } from '../crypto'
+import { checkRateLimit, recordRequest } from '../ratelimit'
+import { logAudit } from '../audit'
 
 const patterns = new Hono<AppEnv>()
 
@@ -79,6 +82,26 @@ patterns.get('/download/:token', async (c) => {
     return jsonError(c, 404, 'Encrypted pattern not found or expired')
   }
 
+  // Get device CN from R2 custom metadata for rate limiting and audit
+  const deviceCn = object.customMetadata?.device_cn
+  const patternUuid = object.customMetadata?.pattern_uuid
+
+  if (deviceCn) {
+    // Check rate limit before serving
+    const rateLimitResult = await checkRateLimit(c.env.audit_kv, deviceCn)
+    if (!rateLimitResult.allowed) {
+      c.header('Retry-After', String(rateLimitResult.retryAfter ?? 60))
+      return jsonError(c, 429, rateLimitResult.error ?? 'Rate limit exceeded')
+    }
+
+    // Record this request for rate limiting
+    await recordRequest(c.env.audit_kv, deviceCn)
+
+    // Log audit event
+    const clientIp = c.req.header('CF-Connecting-IP') ?? c.req.header('X-Forwarded-For')
+    await logAudit(c.env.audit_kv, 'download_encrypted', deviceCn, patternUuid ?? token, clientIp)
+  }
+
   const data = await object.arrayBuffer()
 
   // Delete the file after reading (one-time download)
@@ -116,14 +139,20 @@ patterns.post('/:uuid/encrypted', auth.authMiddleware(), async (c) => {
   const { pem } = bodyResult.data
   const patternUuid = uuidResult.data
 
-  // Extract device public key from certificate chain
+  // Extract device CN and public key from certificate chain
   let devicePublicKey: CryptoKey
+  let deviceCn: string
   try {
+    deviceCn = extractDeviceCn(pem)
     devicePublicKey = await extractDevicePublicKey(pem)
   } catch (e) {
     const message = e instanceof Error ? e.message : 'Failed to extract device public key'
     return jsonError(c, 400, message)
   }
+
+  // Log audit event for encrypted pattern request
+  const clientIp = c.req.header('CF-Connecting-IP') ?? c.req.header('X-Forwarded-For')
+  await logAudit(c.env.audit_kv, 'request_encrypted', deviceCn, patternUuid, clientIp)
 
   // Fetch plaintext pattern from R2
   const objectName = `patterns/${patternUuid}`
@@ -156,11 +185,15 @@ patterns.post('/:uuid/encrypted', auth.authMiddleware(), async (c) => {
     .join('')
   const encryptedObjectName = `encrypted/${patternUuid}-${randomHex}.dat`
 
-  // Store encrypted file in R2
+  // Store encrypted file in R2 with device metadata for audit/rate limiting
   try {
     await c.env.bucket.put(encryptedObjectName, encryptedFile, {
       httpMetadata: {
         contentType: 'application/octet-stream',
+      },
+      customMetadata: {
+        device_cn: deviceCn,
+        pattern_uuid: patternUuid,
       },
     })
   } catch (e) {

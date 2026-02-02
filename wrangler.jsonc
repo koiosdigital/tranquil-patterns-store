@@ -7,13 +7,19 @@
   "r2_buckets": [
     {
       "binding": "bucket",
-      "bucket_name": "tranquil",
+      "bucket_name": "tranquil-tracks",
     },
   ],
   "d1_databases": [
     {
       "binding": "database",
-      "database_id": "671954cf-2942-44a1-80e6-e943cece374b",
+      "database_id": "4a86889b-7889-401b-a8db-8724b957f10e",
+    },
+  ],
+  "kv_namespaces": [
+    {
+      "binding": "audit_kv",
+      "id": "c0be11d150db4883b495b7c8997ca05f",
     },
   ],
 }

@@ -7,6 +7,7 @@ import { z } from 'zod'
 export type CloudflareBindings = {
   bucket: R2Bucket
   database: D1Database
+  audit_kv: KVNamespace // Audit logs and rate limiting
   ADMIN_JWT_SECRET: string
   USER_JWT_SECRET: string
   LICENSE_SIGNING_KEY: string // RSA-2048 private key (PEM) for signing licenses
@@ -184,30 +185,6 @@ export const swaggerDocument = {
         },
       },
     },
-    '/patterns/{uuid}/data': {
-      get: {
-        tags: ['Patterns'],
-        summary: 'Get pattern data file',
-        security: [{ bearerAuth: [] }],
-        parameters: [
-          {
-            name: 'uuid',
-            in: 'path',
-            required: true,
-            schema: { type: 'string', format: 'uuid' },
-          },
-        ],
-        responses: {
-          '200': {
-            description: 'Pattern data',
-            content: { 'text/plain': {} },
-          },
-          '400': { description: 'Invalid UUID format' },
-          '401': { description: 'Unauthorized' },
-          '404': { description: 'Pattern data not found' },
-        },
-      },
-    },
     '/patterns/{uuid}/thumb.png': {
       get: {
         tags: ['Patterns'],
@@ -275,7 +252,8 @@ export const swaggerDocument = {
       get: {
         tags: ['Patterns'],
         summary: 'Download encrypted pattern file',
-        description: 'Downloads an encrypted pattern .dat file using the token from /patterns/{uuid}/encrypted',
+        description:
+          'Downloads an encrypted pattern .dat file using the token from /patterns/{uuid}/encrypted. Rate limited to 20/min, 100/hr, 200/day per device.',
         parameters: [
           {
             name: 'token',
@@ -292,6 +270,15 @@ export const swaggerDocument = {
           },
           '400': { description: 'Invalid download token' },
           '404': { description: 'Encrypted pattern not found or expired' },
+          '429': {
+            description: 'Rate limit exceeded',
+            headers: {
+              'Retry-After': {
+                description: 'Seconds until rate limit resets',
+                schema: { type: 'integer' },
+              },
+            },
+          },
         },
       },
     },
@@ -495,6 +482,7 @@ export const swaggerDocument = {
           valid_to: { type: 'integer', description: 'Unix timestamp' },
           license_id: { type: 'string' },
           issued_at: { type: 'integer', description: 'Unix timestamp' },
+          store_token: { type: 'string', description: 'Device-scoped JWT for store access' },
         },
       },
       LicenseResponse: {
@@ -509,7 +497,7 @@ export const swaggerDocument = {
       EncryptedPatternRequest: {
         type: 'object',
         properties: {
-          pem: { type: 'string', description: 'Device certificate chain (PEM format)' },
+          pem: { type: 'string', description: 'Base64-encoded device certificate chain (PEM format)' },
         },
         required: ['pem'],
       },
