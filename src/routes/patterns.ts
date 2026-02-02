@@ -10,6 +10,7 @@ import {
   encryptPattern,
   buildEncryptedPatternFile,
   arrayBufferToBase64,
+  textPatternToBinary,
 } from '../crypto'
 import { checkRateLimit, recordRequest } from '../ratelimit'
 import { logAudit } from '../audit'
@@ -179,24 +180,28 @@ patterns.post('/:uuid/encrypted', auth.authMiddleware(), async (c) => {
   const clientIp = c.req.header('CF-Connecting-IP') ?? c.req.header('X-Forwarded-For')
   await logAudit(c.env.audit_kv, 'request_encrypted', deviceCn, patternUuid, clientIp)
 
-  // Fetch plaintext pattern from R2
+  // Fetch plaintext pattern from R2 (stored as text: "theta rho\n" per line)
   const objectName = `patterns/${patternUuid}`
   const object = await c.env.bucket.get(objectName)
   if (!object) {
     return jsonError(c, 404, 'Pattern not found')
   }
 
-  const patternData = new Uint8Array(await object.arrayBuffer())
+  // Convert text pattern to binary format (6 bytes per point: float32 theta + uint16 rho)
+  const textData = await object.text()
+  const patternData = textPatternToBinary(textData)
 
   // Encrypt pattern for this device
   let encryptedFile: Uint8Array
   let originalHash: Uint8Array
   let originalSize: number
+  let pointCount: number
   try {
     const encryptionResult = await encryptPattern(patternData, devicePublicKey)
     encryptedFile = buildEncryptedPatternFile(encryptionResult)
     originalHash = encryptionResult.originalHash
     originalSize = encryptionResult.originalSize
+    pointCount = encryptionResult.pointCount
   } catch (e) {
     console.error('Encryption error:', e)
     const message = e instanceof Error ? e.message : 'Failed to encrypt pattern'
@@ -237,6 +242,7 @@ patterns.post('/:uuid/encrypted', auth.authMiddleware(), async (c) => {
     encryption: {
       original_size: originalSize,
       original_hash: arrayBufferToBase64(originalHash.buffer as ArrayBuffer),
+      point_count: pointCount,
     },
   })
 })

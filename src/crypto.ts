@@ -210,33 +210,85 @@ async function importRsaPrivateKey(pem: string): Promise<CryptoKey> {
 }
 
 // =============================================================================
+// Pattern Format Conversion
+// =============================================================================
+
+interface BinaryPoint {
+  theta: number // radians
+  rho: number // 0.0 to 1.0
+}
+
+/**
+ * Parse text pattern (theta rho per line) to binary points.
+ * Text format: "theta rho\n" where theta is radians and rho is 0.0-1.0
+ */
+function parseTextPattern(text: string): BinaryPoint[] {
+  return text
+    .split('\n')
+    .filter((line) => line.trim() && !line.startsWith('#'))
+    .map((line) => {
+      const [theta, rho] = line.trim().split(/\s+/).map(parseFloat)
+      return { theta, rho }
+    })
+    .filter((p) => !isNaN(p.theta) && !isNaN(p.rho))
+}
+
+/**
+ * Convert pattern points to binary format.
+ * Binary format: 6 bytes per point (float32 theta + uint16 rho)
+ */
+function createBinaryPayload(points: BinaryPoint[]): Uint8Array {
+  const buffer = new ArrayBuffer(points.length * 6)
+  const view = new DataView(buffer)
+
+  points.forEach((p, i) => {
+    const offset = i * 6
+    view.setFloat32(offset, p.theta, true) // little-endian
+    view.setUint16(offset + 4, Math.round(p.rho * 65535), true) // little-endian
+  })
+
+  return new Uint8Array(buffer)
+}
+
+/**
+ * Convert text pattern to binary format for encryption.
+ * @param textData - Pattern text data (theta rho per line)
+ * @returns Binary pattern data (6 bytes per point)
+ */
+export function textPatternToBinary(textData: string): Uint8Array {
+  const points = parseTextPattern(textData)
+  return createBinaryPayload(points)
+}
+
+// =============================================================================
 // Pattern Encryption
 // =============================================================================
 
 export interface EncryptionResult {
-  encryptedData: Uint8Array // Ciphertext + GCM tag
+  encryptedData: Uint8Array // AES-CTR ciphertext (no auth tag)
   encryptedKey: Uint8Array // RSA-OAEP encrypted AES key (512 bytes for RSA-4096)
-  iv: Uint8Array // 12-byte nonce
+  iv: Uint8Array // 16-byte IV for CTR mode
   originalSize: number
   originalHash: Uint8Array // SHA-256 of plaintext
+  pointCount: number // Number of points in pattern
 }
 
 export async function encryptPattern(
   patternData: Uint8Array,
   devicePublicKey: CryptoKey
 ): Promise<EncryptionResult> {
-  // Generate random AES-256 key and IV
-  const aesKey = (await crypto.subtle.generateKey({ name: 'AES-GCM', length: 256 }, true, [
+  // Generate random AES-256 key and 16-byte IV for CTR mode
+  const aesKey = (await crypto.subtle.generateKey({ name: 'AES-CTR', length: 256 }, true, [
     'encrypt',
   ])) as CryptoKey
-  const iv = crypto.getRandomValues(new Uint8Array(12))
+  const iv = crypto.getRandomValues(new Uint8Array(16))
 
-  // Calculate original hash
+  // Calculate original hash (integrity verified on download)
   const originalHash = new Uint8Array(await crypto.subtle.digest('SHA-256', patternData))
 
-  // Encrypt pattern with AES-256-GCM
+  // Encrypt pattern with AES-256-CTR
   const encryptedData = new Uint8Array(
-    await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, aesKey, patternData)
+    await crypto.subtle.encrypt({ name: 'AES-CTR', counter: iv, length: 64 }, aesKey, patternData)
   )
 
   // Export AES key for encryption
@@ -247,12 +299,16 @@ export async function encryptPattern(
     await crypto.subtle.encrypt({ name: 'RSA-OAEP' }, devicePublicKey, rawAesKey)
   )
 
+  // Calculate point count (6 bytes per point: float32 theta + uint16 rho)
+  const pointCount = Math.floor(patternData.length / 6)
+
   return {
     encryptedData,
     encryptedKey,
     iv,
     originalSize: patternData.length,
     originalHash,
+    pointCount,
   }
 }
 
@@ -261,8 +317,9 @@ export async function encryptPattern(
 // =============================================================================
 
 const VERSION = 0x0001
-const SCHEME = 1 // RSA-OAEP + AES-GCM
-const HEADER_SIZE = 568
+const SCHEME = 1 // RSA-OAEP + AES-CTR
+const FLAGS = 0x01 // Binary format
+const HEADER_SIZE = 576
 
 export function buildEncryptedPatternFile(result: EncryptionResult): Uint8Array {
   // Validate encrypted key size (512 bytes for RSA-4096)
@@ -270,12 +327,12 @@ export function buildEncryptedPatternFile(result: EncryptionResult): Uint8Array 
     throw new Error(`Expected 512-byte encrypted key, got ${result.encryptedKey.length}`)
   }
 
-  // Validate IV size
-  if (result.iv.length !== 12) {
-    throw new Error(`Expected 12-byte IV, got ${result.iv.length}`)
+  // Validate IV size (16 bytes for CTR mode)
+  if (result.iv.length !== 16) {
+    throw new Error(`Expected 16-byte IV, got ${result.iv.length}`)
   }
 
-  // Build header (568 bytes)
+  // Build header (576 bytes)
   const header = new ArrayBuffer(HEADER_SIZE)
   const view = new DataView(header)
   const bytes = new Uint8Array(header)
@@ -299,12 +356,16 @@ export function buildEncryptedPatternFile(result: EncryptionResult): Uint8Array 
   view.setUint8(offset, SCHEME)
   offset += 1
 
-  // Reserved (1 byte)
-  view.setUint8(offset, 0)
+  // Flags (1 byte) - 0x01 = binary format
+  view.setUint8(offset, FLAGS)
   offset += 1
 
   // Original size (4 bytes) - little-endian
   view.setUint32(offset, result.originalSize, true)
+  offset += 4
+
+  // Point count (4 bytes) - little-endian
+  view.setUint32(offset, result.pointCount, true)
   offset += 4
 
   // Original hash (32 bytes)
@@ -315,16 +376,16 @@ export function buildEncryptedPatternFile(result: EncryptionResult): Uint8Array 
   bytes.set(result.encryptedKey, offset)
   offset += 512
 
-  // IV (12 bytes)
+  // IV (16 bytes for CTR mode)
   bytes.set(result.iv, offset)
-  offset += 12
+  offset += 16
 
   // Verify offset matches header size
   if (offset !== HEADER_SIZE) {
     throw new Error(`Header size mismatch: ${offset} != ${HEADER_SIZE}`)
   }
 
-  // Combine header + encrypted data (includes GCM tag at end)
+  // Combine header + encrypted data (CTR mode, no auth tag)
   const totalSize = HEADER_SIZE + result.encryptedData.length
   const file = new Uint8Array(totalSize)
   file.set(bytes, 0)

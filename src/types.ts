@@ -558,6 +558,7 @@ export const swaggerDocument = {
             properties: {
               original_size: { type: 'integer' },
               original_hash: { type: 'string', description: 'Base64 SHA-256 hash' },
+              point_count: { type: 'integer', description: 'Number of points in pattern' },
             },
           },
         },
