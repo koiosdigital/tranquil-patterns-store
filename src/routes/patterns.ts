@@ -10,12 +10,57 @@ import {
   encryptPattern,
   buildEncryptedPatternFile,
   arrayBufferToBase64,
-  textPatternToBinary,
+  buildThrbFile,
+  isThrbFile,
+  extractThrbPoints,
 } from '../crypto'
 import { checkRateLimit, recordRequest } from '../ratelimit'
 import { logAudit } from '../audit'
 
 const patterns = new Hono<AppEnv>()
+
+/**
+ * Migrate a pattern from old text format to THRB binary format.
+ * Checks if .dat exists, if not converts from text and deletes old file.
+ */
+async function migratePatternToThrb(
+  bucket: R2Bucket,
+  uuid: string
+): Promise<{ migrated: boolean; error?: string }> {
+  const datPath = `patterns/${uuid}.dat`
+  const textPath = `patterns/${uuid}`
+
+  // Check if THRB .dat already exists
+  const datObject = await bucket.head(datPath)
+  if (datObject) {
+    return { migrated: false } // Already in THRB format
+  }
+
+  // Check if old text format exists
+  const textObject = await bucket.get(textPath)
+  if (!textObject) {
+    return { migrated: false } // No pattern file found
+  }
+
+  try {
+    // Read text pattern and convert to THRB
+    const textData = await textObject.text()
+    const thrbFile = buildThrbFile(textData)
+
+    // Save as THRB .dat
+    await bucket.put(datPath, thrbFile, {
+      httpMetadata: { contentType: 'application/octet-stream' },
+    })
+
+    // Delete old text file
+    await bucket.delete(textPath)
+
+    return { migrated: true }
+  } catch (e) {
+    const error = e instanceof Error ? e.message : 'Migration failed'
+    return { migrated: false, error }
+  }
+}
 
 patterns.get('/', auth.authMiddleware(), async (c) => {
   const query = paginationQuerySchema.safeParse({
@@ -36,6 +81,10 @@ patterns.get('/', auth.authMiddleware(), async (c) => {
     .prepare('SELECT * FROM patterns ORDER BY popularity DESC LIMIT ? OFFSET ?')
     .bind(per_page, offset)
   const { results }: { results: Pattern[] } = await stmt.all()
+
+  // Migrate patterns to THRB format if needed (background, don't block response)
+  const migrations = results.map((p) => migratePatternToThrb(c.env.bucket, p.uuid))
+  Promise.all(migrations).catch((e) => console.error('Migration error:', e))
 
   return c.json({
     data: results,
@@ -180,16 +229,19 @@ patterns.post('/:uuid/encrypted', auth.authMiddleware(), async (c) => {
   const clientIp = c.req.header('CF-Connecting-IP') ?? c.req.header('X-Forwarded-For')
   await logAudit(c.env.audit_kv, 'request_encrypted', deviceCn, patternUuid, clientIp)
 
-  // Fetch plaintext pattern from R2 (stored as text: "theta rho\n" per line)
-  const objectName = `patterns/${patternUuid}`
+  // Fetch THRB pattern from R2 (stored as .dat binary file)
+  const objectName = `patterns/${patternUuid}.dat`
   const object = await c.env.bucket.get(objectName)
   if (!object) {
     return jsonError(c, 404, 'Pattern not found')
   }
 
-  // Convert text pattern to binary format (6 bytes per point: float32 theta + uint16 rho)
-  const textData = await object.text()
-  const patternData = textPatternToBinary(textData)
+  // Read THRB file and extract binary points for encryption
+  const thrbData = new Uint8Array(await object.arrayBuffer())
+  if (!isThrbFile(thrbData)) {
+    return jsonError(c, 500, 'Pattern is not in THRB format')
+  }
+  const { points: patternData } = extractThrbPoints(thrbData)
 
   // Encrypt pattern for this device
   let encryptedFile: Uint8Array
@@ -267,13 +319,16 @@ patterns.post('/', auth.authMiddleware(), async (c) => {
 
   const { patternData, pattern, thumbData } = bodyResult.data
 
-  // Calculate size_bytes from pattern data
-  const sizeBytes = new TextEncoder().encode(patternData).length
+  // Convert text pattern to THRB binary format
+  const thrbFile = buildThrbFile(patternData)
+  const sizeBytes = thrbFile.length
 
-  // Store pattern data
+  // Store pattern as THRB .dat file
   try {
-    const objectName = `patterns/${pattern.uuid}`
-    await c.env.bucket.put(objectName, patternData)
+    const objectName = `patterns/${pattern.uuid}.dat`
+    await c.env.bucket.put(objectName, thrbFile, {
+      httpMetadata: { contentType: 'application/octet-stream' },
+    })
   } catch {
     return jsonError(c, 500, 'Failed to store pattern data')
   }

@@ -261,6 +261,74 @@ export function textPatternToBinary(textData: string): Uint8Array {
 }
 
 // =============================================================================
+// THRB File Format (Unencrypted Binary Patterns)
+// =============================================================================
+
+const THRB_MAGIC = 0x42524854 // "THRB"
+const THRB_HEADER_SIZE = 8
+
+/**
+ * Build a THRB file from text pattern data.
+ * THRB format: 8-byte header (magic + point_count) + binary points
+ * @param textData - Pattern text data (theta rho per line)
+ * @returns Complete THRB file as Uint8Array
+ */
+export function buildThrbFile(textData: string): Uint8Array {
+  const points = parseTextPattern(textData)
+  const binaryPoints = createBinaryPayload(points)
+
+  const file = new Uint8Array(THRB_HEADER_SIZE + binaryPoints.length)
+  const view = new DataView(file.buffer)
+
+  // Magic (4 bytes) - "THRB" as little-endian uint32
+  view.setUint32(0, THRB_MAGIC, true)
+
+  // Point count (4 bytes) - little-endian
+  view.setUint32(4, points.length, true)
+
+  // Binary points
+  file.set(binaryPoints, THRB_HEADER_SIZE)
+
+  return file
+}
+
+/**
+ * Check if data is a valid THRB file.
+ * @param data - File data
+ * @returns true if valid THRB format
+ */
+export function isThrbFile(data: Uint8Array): boolean {
+  if (data.length < THRB_HEADER_SIZE) return false
+  const view = new DataView(data.buffer, data.byteOffset, data.byteLength)
+  return view.getUint32(0, true) === THRB_MAGIC
+}
+
+/**
+ * Extract binary points from a THRB file (without header).
+ * @param thrbData - Complete THRB file data
+ * @returns Binary points only (for encryption)
+ */
+export function extractThrbPoints(thrbData: Uint8Array): { points: Uint8Array; pointCount: number } {
+  if (!isThrbFile(thrbData)) {
+    throw new Error('Invalid THRB file: bad magic number')
+  }
+
+  const view = new DataView(thrbData.buffer, thrbData.byteOffset, thrbData.byteLength)
+  const pointCount = view.getUint32(4, true)
+
+  // Extract just the points (skip 8-byte header)
+  const points = thrbData.slice(THRB_HEADER_SIZE)
+
+  // Validate size
+  const expectedSize = pointCount * 6
+  if (points.length !== expectedSize) {
+    throw new Error(`THRB size mismatch: expected ${expectedSize} bytes, got ${points.length}`)
+  }
+
+  return { points, pointCount }
+}
+
+// =============================================================================
 // Pattern Encryption
 // =============================================================================
 
