@@ -55,6 +55,27 @@ export const playlistSchema = z.object({
 })
 
 // =============================================================================
+// Pagination
+// =============================================================================
+
+export const paginationQuerySchema = z.object({
+  page: z.coerce.number().int().min(1).default(1),
+  per_page: z.coerce.number().int().min(1).max(100).default(20),
+})
+
+export type PaginationQuery = z.infer<typeof paginationQuerySchema>
+
+export interface PaginatedResponse<T> {
+  data: T[]
+  pagination: {
+    total: number
+    page: number
+    per_page: number
+    total_pages: number
+  }
+}
+
+// =============================================================================
 // Request Body Schemas
 // =============================================================================
 
@@ -125,12 +146,26 @@ export const swaggerDocument = {
         tags: ['Patterns'],
         summary: 'List all patterns',
         security: [{ bearerAuth: [] }],
+        parameters: [
+          {
+            name: 'page',
+            in: 'query',
+            schema: { type: 'integer', minimum: 1, default: 1 },
+            description: 'Page number',
+          },
+          {
+            name: 'per_page',
+            in: 'query',
+            schema: { type: 'integer', minimum: 1, maximum: 100, default: 20 },
+            description: 'Items per page',
+          },
+        ],
         responses: {
           '200': {
-            description: 'Array of patterns',
+            description: 'Paginated array of patterns',
             content: {
               'application/json': {
-                schema: { type: 'array', items: { $ref: '#/components/schemas/Pattern' } },
+                schema: { $ref: '#/components/schemas/PaginatedPatterns' },
               },
             },
           },
@@ -316,15 +351,26 @@ export const swaggerDocument = {
         tags: ['Playlists'],
         summary: 'List all playlists',
         security: [{ bearerAuth: [] }],
+        parameters: [
+          {
+            name: 'page',
+            in: 'query',
+            schema: { type: 'integer', minimum: 1, default: 1 },
+            description: 'Page number',
+          },
+          {
+            name: 'per_page',
+            in: 'query',
+            schema: { type: 'integer', minimum: 1, maximum: 100, default: 20 },
+            description: 'Items per page',
+          },
+        ],
         responses: {
           '200': {
-            description: 'Array of playlists with their patterns',
+            description: 'Paginated array of playlists with their patterns',
             content: {
               'application/json': {
-                schema: {
-                  type: 'array',
-                  items: { $ref: '#/components/schemas/PlaylistWithPatterns' },
-                },
+                schema: { $ref: '#/components/schemas/PaginatedPlaylists' },
               },
             },
           },
@@ -515,6 +561,38 @@ export const swaggerDocument = {
             },
           },
         },
+      },
+      Pagination: {
+        type: 'object',
+        properties: {
+          total: { type: 'integer', description: 'Total number of items' },
+          page: { type: 'integer', description: 'Current page number' },
+          per_page: { type: 'integer', description: 'Items per page' },
+          total_pages: { type: 'integer', description: 'Total number of pages' },
+        },
+        required: ['total', 'page', 'per_page', 'total_pages'],
+      },
+      PaginatedPatterns: {
+        type: 'object',
+        properties: {
+          data: {
+            type: 'array',
+            items: { $ref: '#/components/schemas/Pattern' },
+          },
+          pagination: { $ref: '#/components/schemas/Pagination' },
+        },
+        required: ['data', 'pagination'],
+      },
+      PaginatedPlaylists: {
+        type: 'object',
+        properties: {
+          data: {
+            type: 'array',
+            items: { $ref: '#/components/schemas/PlaylistWithPatterns' },
+          },
+          pagination: { $ref: '#/components/schemas/Pagination' },
+        },
+        required: ['data', 'pagination'],
       },
     },
   },

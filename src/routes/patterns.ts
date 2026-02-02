@@ -2,7 +2,7 @@ import { Hono } from 'hono'
 import { Buffer } from 'node:buffer'
 import { z } from 'zod'
 import { type AppEnv, jsonError } from '../app'
-import { type Pattern, postPatternBodySchema, uuidSchema } from '../types'
+import { type Pattern, postPatternBodySchema, uuidSchema, paginationQuerySchema } from '../types'
 import * as auth from '../auth'
 import {
   extractDevicePublicKey,
@@ -17,9 +17,34 @@ import { logAudit } from '../audit'
 const patterns = new Hono<AppEnv>()
 
 patterns.get('/', auth.authMiddleware(), async (c) => {
-  const stmt = c.env.database.prepare('SELECT * FROM patterns ORDER BY popularity DESC')
+  const query = paginationQuerySchema.safeParse({
+    page: c.req.query('page'),
+    per_page: c.req.query('per_page'),
+  })
+
+  const { page, per_page } = query.success ? query.data : { page: 1, per_page: 20 }
+  const offset = (page - 1) * per_page
+
+  // Get total count
+  const countStmt = c.env.database.prepare('SELECT COUNT(*) as total FROM patterns')
+  const countResult = await countStmt.first<{ total: number }>()
+  const total = countResult?.total ?? 0
+
+  // Get paginated results
+  const stmt = c.env.database
+    .prepare('SELECT * FROM patterns ORDER BY popularity DESC LIMIT ? OFFSET ?')
+    .bind(per_page, offset)
   const { results }: { results: Pattern[] } = await stmt.all()
-  return c.json(results)
+
+  return c.json({
+    data: results,
+    pagination: {
+      total,
+      page,
+      per_page,
+      total_pages: Math.ceil(total / per_page),
+    },
+  })
 })
 
 patterns.get('/:uuid', auth.authMiddleware(), async (c) => {

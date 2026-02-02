@@ -6,14 +6,30 @@ import {
   type PlaylistWithPatterns,
   postPlaylistBodySchema,
   uuidSchema,
+  paginationQuerySchema,
 } from '../types'
 import * as auth from '../auth'
 
 const playlists = new Hono<AppEnv>()
 
 playlists.get('/', auth.authMiddleware(), async (c) => {
-  // Get all playlists
-  const playlistsStmt = c.env.database.prepare('SELECT * FROM playlists ORDER BY name')
+  const query = paginationQuerySchema.safeParse({
+    page: c.req.query('page'),
+    per_page: c.req.query('per_page'),
+  })
+
+  const { page, per_page } = query.success ? query.data : { page: 1, per_page: 20 }
+  const offset = (page - 1) * per_page
+
+  // Get total count
+  const countStmt = c.env.database.prepare('SELECT COUNT(*) as total FROM playlists')
+  const countResult = await countStmt.first<{ total: number }>()
+  const total = countResult?.total ?? 0
+
+  // Get paginated playlists
+  const playlistsStmt = c.env.database
+    .prepare('SELECT * FROM playlists ORDER BY name LIMIT ? OFFSET ?')
+    .bind(per_page, offset)
   const { results: playlistResults }: { results: Playlist[] } = await playlistsStmt.all()
 
   // For each playlist, get its patterns via the junction table
@@ -37,7 +53,15 @@ playlists.get('/', auth.authMiddleware(), async (c) => {
     })
   )
 
-  return c.json(playlistsWithPatterns)
+  return c.json({
+    data: playlistsWithPatterns,
+    pagination: {
+      total,
+      page,
+      per_page,
+      total_pages: Math.ceil(total / per_page),
+    },
+  })
 })
 
 playlists.get('/:uuid', auth.authMiddleware(), async (c) => {
